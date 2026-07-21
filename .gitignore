@@ -1,0 +1,4 @@
+node_modules/
+.micro-hoster/
+coverage/
+npm-debug.log*

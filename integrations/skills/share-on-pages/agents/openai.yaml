@@ -1,0 +1,4 @@
+interface:
+  display_name: "Share on Pages"
+  short_description: "Publish a local web artifact to a share link"
+  default_prompt: "Use $share-on-pages to publish this HTML artifact and return a verified team share link."

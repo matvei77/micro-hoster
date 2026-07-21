@@ -1,0 +1,14 @@
+{
+  "name": "@theartisan/micro-hoster",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Single-user Cloudflare Pages publisher for generated HTML artifacts",
+  "type": "module",
+  "bin": { "micro-hoster": "./src/cli.js" },
+  "scripts": {
+    "check": "node --check src/cli.js && node --test",
+    "test": "node --test"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": { "wrangler": "4.112.0" }
+}
