@@ -12,6 +12,39 @@ micro-hoster status
 
 Wrangler opens Cloudflare's browser login. If the account has multiple Cloudflare accounts, set `CLOUDFLARE_ACCOUNT_ID` before publishing.
 
+## Install from GitHub
+
+### Codex plugin
+
+Install the CLI directly from GitHub, add this repository as a Codex marketplace, and install the plugin:
+
+```powershell
+npm install --global github:matvei77/micro-hoster
+codex plugin marketplace add matvei77/micro-hoster
+codex plugin add micro-hoster@personal
+npx wrangler login
+```
+
+Start a new Codex thread after installation so the bundled `share-on-pages` skill is discovered. To pull later plugin updates:
+
+```powershell
+codex plugin marketplace upgrade personal
+codex plugin add micro-hoster@personal
+```
+
+### Codex, Claude Code, and Kimi Code
+
+The repository installer links the same canonical skill source into all three agents and installs the CLI:
+
+```powershell
+git clone https://github.com/matvei77/micro-hoster.git
+Set-Location micro-hoster
+.\scripts\install.ps1
+npx wrangler login
+```
+
+The installer never overwrites an existing skill directory that it does not own.
+
 ## Publish
 
 ```powershell
@@ -37,4 +70,4 @@ The default Pages project is `micro-hoster`. Override it with `MICRO_HOSTER_PROJ
 
 ## Agent integration
 
-The reusable skill source is in `integrations/skills/share-on-pages`. The installer exposes it globally to Codex, Claude Code, and Kimi Code while all three use the same source of truth. Invoke it as `$share-on-pages` in Codex, `/share-on-pages` in Claude Code, or `/skill:share-on-pages` in Kimi Code.
+The canonical skill source is bundled in the `micro-hoster` Codex plugin at `plugins/micro-hoster/skills/share-on-pages`. The repo marketplace is defined at `.agents/plugins/marketplace.json`. The installer exposes that same source globally to Codex, Claude Code, and Kimi Code. Invoke it as `$share-on-pages` in Codex, `/share-on-pages` in Claude Code, or `/skill:share-on-pages` in Kimi Code.
