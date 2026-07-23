@@ -17,7 +17,13 @@ Use the installed `micro-hoster` command. Treat publication as a public external
 
 ## Authentication
 
-If the command reports that Cloudflare is not authenticated, ask the user to run `npx wrangler login` from the micro-hoster repository. Retry only after login succeeds.
+If `micro-hoster` is not installed, ask the user to run:
+
+```powershell
+npm install --global github:matvei77/micro-hoster
+```
+
+If the command reports that Cloudflare is not authenticated, ask the user to run `npx wrangler login`. Retry only after login succeeds.
 
 ## Constraints
 

@@ -1,7 +1,11 @@
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$skillSource = Join-Path $repoRoot "integrations\skills\share-on-pages"
+$skillSource = Join-Path $repoRoot "plugins\micro-hoster\skills\share-on-pages"
+$legacySkillSources = @(
+    (Join-Path $repoRoot "integrations\skills\share-on-pages"),
+    (Join-Path $repoRoot ".agents\plugins\plugins\micro-hoster\skills\share-on-pages")
+)
 $skillTargets = @(
     (Join-Path $env:USERPROFILE ".codex\skills\share-on-pages"),
     (Join-Path $env:USERPROFILE ".claude\skills\share-on-pages"),
@@ -24,7 +28,11 @@ foreach ($target in $skillTargets) {
         if ($item.LinkType -eq "Junction" -and $item.Target -contains $skillSource) {
             continue
         }
-        throw "Skill target already exists and was not changed: $target"
+        if ($item.LinkType -eq "Junction" -and ($item.Target | Where-Object { $legacySkillSources -contains $_ })) {
+            [System.IO.Directory]::Delete($target)
+        } else {
+            throw "Skill target already exists and was not changed: $target"
+        }
     }
     New-Item -ItemType Junction -Path $target -Target $skillSource | Out-Null
 }
