@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { monthlyDeploymentUsage, slugify } from "../src/cli.js";
+import { monthlyDeploymentUsage, selectAccount, slugify } from "../src/cli.js";
 
 const execFileAsync = promisify(execFile);
 const cli = resolve("src/cli.js");
@@ -69,4 +69,39 @@ test("publisher refuses deployment when the local monthly ceiling is reached", a
   await writeFile(html, "<!doctype html><title>Plan</title>");
   await writeFile(join(state, "manifest.json"), JSON.stringify({ version: 1, publications: [], deployments }));
   await assert.rejects(execFileAsync(process.execPath, [cli, "publish", html, "--dry-run"], { env: { ...process.env, MICRO_HOSTER_HOME: state } }), /Cost guard stopped this deployment/);
+});
+
+test("Cloudflare account selection is explicit when multiple accounts exist", () => {
+  const accounts = [
+    { id: "account-1", name: "Personal" },
+    { id: "account-2", name: "Studio" },
+  ];
+
+  assert.deepEqual(selectAccount(accounts, "account-2"), accounts[1]);
+  assert.deepEqual(selectAccount(accounts, "personal"), accounts[0]);
+  assert.throws(() => selectAccount(accounts), /Multiple Cloudflare accounts are available/);
+  assert.throws(() => selectAccount(accounts, "missing"), /was not found/);
+});
+
+test("agent manifests package the same canonical skill", async () => {
+  const codexRoot = resolve("plugins/micro-hoster");
+  const codexManifest = JSON.parse(await readFile(join(codexRoot, ".codex-plugin", "plugin.json"), "utf8"));
+  const kimiManifest = JSON.parse(await readFile(resolve(".kimi-plugin/plugin.json"), "utf8"));
+  const codexMarketplace = JSON.parse(await readFile(resolve(".agents/plugins/marketplace.json"), "utf8"));
+  const claudeManifest = JSON.parse(await readFile(resolve(".claude-plugin/plugin.json"), "utf8"));
+  const claudeMarketplace = JSON.parse(await readFile(resolve(".claude-plugin/marketplace.json"), "utf8"));
+  const packageManifest = JSON.parse(await readFile(resolve("package.json"), "utf8"));
+  const canonicalSkill = await readFile(resolve("skills/share-on-pages/SKILL.md"), "utf8");
+  const bundledCodexSkill = await readFile(join(resolve(codexRoot, codexManifest.skills), "share-on-pages", "SKILL.md"), "utf8");
+
+  assert.equal(codexMarketplace.plugins[0].source.path, "./plugins/micro-hoster");
+  assert.equal(resolve(kimiManifest.skills), resolve("skills"));
+  assert.equal(canonicalSkill.replaceAll("\r\n", "\n"), bundledCodexSkill.replaceAll("\r\n", "\n"));
+  assert.equal(kimiManifest.name, codexManifest.name);
+  assert.equal(claudeManifest.name, codexManifest.name);
+  assert.equal(claudeMarketplace.plugins[0].source, "./");
+  assert.equal(claudeMarketplace.plugins[0].version, packageManifest.version);
+  assert.equal(kimiManifest.version, packageManifest.version);
+  assert.equal(codexManifest.version, packageManifest.version);
+  assert.match(canonicalSkill, /^---\r?\nname: share-on-pages/m);
 });

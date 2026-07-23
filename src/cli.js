@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const MAX_FILES = 20_000;
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const CLOUDFLARE_FREE_MONTHLY_BUILDS = 500;
@@ -15,7 +15,7 @@ const DEFAULT_PROJECT = "micro-hoster";
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WRANGLER_BIN = join(PACKAGE_ROOT, "node_modules", "wrangler", "bin", "wrangler.js");
 const FORBIDDEN_SEGMENTS = new Set([".git", ".wrangler", "node_modules", "functions"]);
-const FORBIDDEN_FILES = [/^\.env(?:\..+)?$/i, /^\.dev\.vars$/i, /^\.npmrc$/i, /^_worker\.js$/i, /(?:^|\.)pem$/i, /(?:^|\.)key$/i, /^id_(?:rsa|dsa|ecdsa|ed25519)$/i];
+const FORBIDDEN_FILES = [/^\.env(?:\..+)?$/i, /^\.dev\.vars$/i, /^\.npmrc$/i, /^\.account-binding\.json$/i, /^_worker\.js$/i, /(?:^|\.)pem$/i, /(?:^|\.)key$/i, /^id_(?:rsa|dsa|ecdsa|ed25519)$/i];
 
 function usage() {
   return `micro-hoster ${VERSION}
@@ -23,16 +23,18 @@ function usage() {
 Publish generated HTML and static micro-apps to one Cloudflare Pages project.
 
 Usage:
-  micro-hoster publish <file-or-folder> [--slug <slug>] [--title <title>] [--project <name>] [--dry-run] [--json]
-  micro-hoster status [--json]
-  micro-hoster list [--json]
+  micro-hoster login [--account <id-or-exact-name>] [--json]
+  micro-hoster publish <file-or-folder> [--slug <slug>] [--title <title>] [--project <name>] [--account <id-or-exact-name>] [--dry-run] [--json]
+  micro-hoster status [--project <name>] [--account <id-or-exact-name>] [--json]
+  micro-hoster list [--project <name>] [--account <id-or-exact-name>] [--json]
   micro-hoster help
 
 Environment:
   MICRO_HOSTER_HOME       Local content store (default: ~/.micro-hoster)
   MICRO_HOSTER_PROJECT    Pages project name (default: micro-hoster)
-  CLOUDFLARE_ACCOUNT_ID   Recommended when the login has multiple accounts
+  CLOUDFLARE_ACCOUNT_ID   Cloudflare account to use when the login has multiple accounts
 
+Micro Hoster uses your local Wrangler login and deploys only to your selected Cloudflare account.
 Only static assets are supported. Never publish secrets or private material: Pages links are public.`;
 }
 
@@ -148,8 +150,43 @@ async function prepareInput(source, destination) {
   return absolute;
 }
 
-function stateRoot() {
+function baseStateRoot() {
   return resolve(process.env.MICRO_HOSTER_HOME || join(homedir(), ".micro-hoster"));
+}
+
+function safeStateSegment(value) {
+  const segment = String(value).replace(/[^a-z0-9._-]+/gi, "-").replace(/^-|-$/g, "");
+  if (!segment) fail("Could not derive a safe local state path for the selected Cloudflare account.");
+  return segment;
+}
+
+async function readLegacyBinding(baseRoot) {
+  try {
+    return JSON.parse(await readFile(join(baseRoot, ".account-binding.json"), "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    fail(`Could not read the local account binding: ${error.message}`);
+  }
+}
+
+async function resolveStateRoot(account, project, { bindLegacy = false } = {}) {
+  const baseRoot = baseStateRoot();
+  const scopedRoot = join(baseRoot, "accounts", safeStateSegment(account.id), "projects", project);
+  if (await pathExists(join(scopedRoot, "manifest.json"))) return scopedRoot;
+
+  const legacyManifestPath = join(baseRoot, "manifest.json");
+  if (!(await pathExists(legacyManifestPath))) return scopedRoot;
+
+  const binding = await readLegacyBinding(baseRoot);
+  if (binding) return binding.accountId === account.id && binding.project === project ? baseRoot : scopedRoot;
+
+  const legacyManifest = await loadManifest(baseRoot);
+  const legacyProjects = [...new Set(legacyManifest.deployments.map((item) => item.project).filter(Boolean))];
+  if (legacyProjects.length > 1 || (legacyProjects.length === 1 && legacyProjects[0] !== project)) return scopedRoot;
+  if (bindLegacy) {
+    await writeFile(join(baseRoot, ".account-binding.json"), `${JSON.stringify({ version: 1, accountId: account.id, project }, null, 2)}\n`);
+  }
+  return baseRoot;
 }
 
 async function loadManifest(root) {
@@ -208,9 +245,11 @@ async function buildBundle(root, candidate, manifest) {
   return { buildRoot, files };
 }
 
-function runWrangler(args, { quiet = false } = {}) {
+function runWrangler(args, { quiet = false, accountId = null } = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(process.execPath, [WRANGLER_BIN, ...args], { cwd: PACKAGE_ROOT, env: { ...process.env, NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const env = { ...process.env, NO_COLOR: "1" };
+    if (accountId) env.CLOUDFLARE_ACCOUNT_ID = accountId;
+    const child = spawn(process.execPath, [WRANGLER_BIN, ...args], { cwd: PACKAGE_ROOT, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; if (!quiet) process.stderr.write(chunk); });
@@ -227,13 +266,31 @@ function runWrangler(args, { quiet = false } = {}) {
   });
 }
 
-async function ensureAuthenticated() {
-  try {
-    const { stdout } = await runWrangler(["whoami", "--json"], { quiet: true });
-    return JSON.parse(stdout);
-  } catch {
-    fail("Cloudflare is not authenticated. Run `npx wrangler login` in the micro-hoster repository, then retry.", 2);
+function selectAccount(accounts, selector = null) {
+  if (!accounts.length) fail("Wrangler is authenticated, but no Cloudflare accounts are available for this user.");
+  if (selector) {
+    const normalized = selector.toLowerCase();
+    const matches = accounts.filter((account) => account.id === selector || String(account.name).toLowerCase() === normalized);
+    if (matches.length === 1) return { id: matches[0].id, name: matches[0].name };
+    const available = accounts.map((account) => `${account.name} (${account.id})`).join(", ");
+    if (!matches.length) fail(`Cloudflare account "${selector}" was not found. Available accounts: ${available}`);
+    fail(`Cloudflare account name "${selector}" is ambiguous. Use an account ID instead: ${available}`);
   }
+  if (accounts.length === 1) return { id: accounts[0].id, name: accounts[0].name };
+  const available = accounts.map((account) => `${account.name} (${account.id})`).join(", ");
+  fail(`Multiple Cloudflare accounts are available: ${available}. Re-run with --account <id-or-exact-name> or set CLOUDFLARE_ACCOUNT_ID.`);
+}
+
+async function ensureAuthenticated(selector = null) {
+  let stdout;
+  try {
+    ({ stdout } = await runWrangler(["whoami", "--json"], { quiet: true }));
+  } catch {
+    fail("Cloudflare is not authenticated. Run `micro-hoster login`, complete Cloudflare's browser login, then retry.", 2);
+  }
+  const identity = JSON.parse(stdout);
+  const account = selectAccount(Array.isArray(identity.accounts) ? identity.accounts : [], selector || process.env.CLOUDFLARE_ACCOUNT_ID || null);
+  return { account, authType: identity.authType || null, email: identity.email || null };
 }
 
 function projectArray(payload) {
@@ -248,13 +305,13 @@ function projectDomain(item, project) {
   return String(raw).split(",")[0].trim().replace(/^https?:\/\//, "").replace(/\/$/, "");
 }
 
-async function ensureProject(project, quiet) {
-  const { stdout } = await runWrangler(["pages", "project", "list", "--json"], { quiet: true });
+async function ensureProject(project, quiet, accountId) {
+  const { stdout } = await runWrangler(["pages", "project", "list", "--json"], { quiet: true, accountId });
   const projects = projectArray(JSON.parse(stdout));
   const existing = projects.find((item) => item.name === project || item["Project Name"] === project);
   if (existing) return { created: false, domain: projectDomain(existing, project) };
-  await runWrangler(["pages", "project", "create", project, "--production-branch", "main"], { quiet });
-  const refreshed = await runWrangler(["pages", "project", "list", "--json"], { quiet: true });
+  await runWrangler(["pages", "project", "create", project, "--production-branch", "main"], { quiet, accountId });
+  const refreshed = await runWrangler(["pages", "project", "list", "--json"], { quiet: true, accountId });
   const created = projectArray(JSON.parse(refreshed.stdout)).find((item) => item.name === project || item["Project Name"] === project);
   return { created: true, domain: projectDomain(created, project) };
 }
@@ -298,12 +355,15 @@ async function publish(positional, options) {
   const title = options.title || basename(source, extname(source));
   const project = options.project || process.env.MICRO_HOSTER_PROJECT || DEFAULT_PROJECT;
   validateSlug(project);
-  const root = stateRoot();
   const workRoot = await mkdtemp(join(tmpdir(), "micro-hoster-input-"));
   const preparedPath = join(workRoot, "content");
   let buildRoot;
   try {
     const absoluteSource = await prepareInput(source, preparedPath);
+    const identity = options["dry-run"] ? null : await ensureAuthenticated(options.account || null);
+    const root = options["dry-run"]
+      ? (process.env.MICRO_HOSTER_HOME ? baseStateRoot() : join(workRoot, "dry-run-state"))
+      : await resolveStateRoot(identity.account, project, { bindLegacy: true });
     const manifest = await loadManifest(root);
     const costGuard = monthlyDeploymentUsage(manifest);
     enforceCostGuard(costGuard);
@@ -314,34 +374,44 @@ async function publish(positional, options) {
     buildRoot = bundle.buildRoot;
     const bytes = bundle.files.reduce((sum, file) => sum + file.size, 0);
     if (options["dry-run"]) return { ok: true, dryRun: true, project, slug, title, files: bundle.files.length, bytes, costGuard };
-    await ensureAuthenticated();
-    const projectResult = await ensureProject(project, options.json);
-    const deployed = await runWrangler(["pages", "deploy", buildRoot, "--project-name", project, "--branch", "main", "--commit-message", `Publish ${slug}`, "--commit-dirty=true"], { quiet: options.json });
+    const projectResult = await ensureProject(project, options.json, identity.account.id);
+    const deployed = await runWrangler(["pages", "deploy", buildRoot, "--project-name", project, "--branch", "main", "--commit-message", `Publish ${slug}`, "--commit-dirty=true"], { quiet: options.json, accountId: identity.account.id });
     const deploymentUrl = extractDeploymentUrl(`${deployed.stdout}\n${deployed.stderr}`);
     const shareUrl = `https://${projectResult.domain}/${encodeURIComponent(slug)}/`;
     const httpStatus = await verifyUrl(shareUrl);
     manifest.deployments.push({ deployedAt: publication.publishedAt, project, slug });
     await commitPublication(root, preparedPath, publication, manifest);
-    return { ok: true, project, projectCreated: projectResult.created, environment: "production", slug, title, files: bundle.files.length, bytes, deploymentUrl, shareUrl, verified: true, httpStatus, costGuard: { ...monthlyDeploymentUsage(manifest), usedBeforeDeployment: costGuard.used } };
+    return { ok: true, account: identity.account, project, projectCreated: projectResult.created, environment: "production", slug, title, files: bundle.files.length, bytes, deploymentUrl, shareUrl, verified: true, httpStatus, costGuard: { ...monthlyDeploymentUsage(manifest), usedBeforeDeployment: costGuard.used } };
   } finally {
     await rm(workRoot, { recursive: true, force: true });
     if (buildRoot) await rm(buildRoot, { recursive: true, force: true });
   }
 }
 
-async function status() {
-  const root = stateRoot();
-  const manifest = await loadManifest(root);
+async function status(options = {}) {
+  const project = options.project || process.env.MICRO_HOSTER_PROJECT || DEFAULT_PROJECT;
+  validateSlug(project);
   let authenticated = false;
   let identity = null;
-  try { identity = await ensureAuthenticated(); authenticated = true; }
+  try { identity = await ensureAuthenticated(options.account || null); authenticated = true; }
   catch (error) { if (error.exitCode !== 2) throw error; }
-  return { ok: true, authenticated, identity, stateRoot: root, publications: manifest.publications.length, defaultProject: process.env.MICRO_HOSTER_PROJECT || DEFAULT_PROJECT, costGuard: monthlyDeploymentUsage(manifest) };
+  const root = identity ? await resolveStateRoot(identity.account, project) : baseStateRoot();
+  const manifest = await loadManifest(root);
+  return { ok: true, authenticated, account: identity?.account || null, authType: identity?.authType || null, email: identity?.email || null, stateRoot: root, publications: manifest.publications.length, project, defaultProject: process.env.MICRO_HOSTER_PROJECT || DEFAULT_PROJECT, costGuard: monthlyDeploymentUsage(manifest) };
 }
 
-async function listPublications() {
-  const manifest = await loadManifest(stateRoot());
-  return { ok: true, publications: [...manifest.publications].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt)) };
+async function login(options = {}) {
+  await runWrangler(["login"]);
+  return status(options);
+}
+
+async function listPublications(options = {}) {
+  const project = options.project || process.env.MICRO_HOSTER_PROJECT || DEFAULT_PROJECT;
+  validateSlug(project);
+  const identity = await ensureAuthenticated(options.account || null);
+  const root = await resolveStateRoot(identity.account, project);
+  const manifest = await loadManifest(root);
+  return { ok: true, account: identity.account, project, publications: [...manifest.publications].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt)) };
 }
 
 function printResult(result, json) {
@@ -351,7 +421,11 @@ function printResult(result, json) {
   else if (Array.isArray(result.publications)) {
     if (!result.publications.length) process.stdout.write("No local publications yet.\n");
     else for (const item of result.publications) process.stdout.write(`${item.slug}\t${item.title}\t${item.publishedAt}\n`);
-  } else process.stdout.write(`Authenticated: ${result.authenticated ? "yes" : "no"}\nLocal publications: ${result.publications}\nState: ${result.stateRoot}\n`);
+  } else {
+    process.stdout.write(`Authenticated: ${result.authenticated ? "yes" : "no"}\n`);
+    if (result.account) process.stdout.write(`Cloudflare account: ${result.account.name} (${result.account.id})\n`);
+    process.stdout.write(`Project: ${result.project || result.defaultProject}\nLocal publications: ${result.publications}\nState: ${result.stateRoot}\n`);
+  }
 }
 
 async function main() {
@@ -359,9 +433,10 @@ async function main() {
   if (["help", "--help", "-h"].includes(command)) { process.stdout.write(`${usage()}\n`); return; }
   if (["--version", "version"].includes(command)) { process.stdout.write(`${VERSION}\n`); return; }
   let result;
-  if (command === "publish") result = await publish(positional, options);
-  else if (command === "status") result = await status();
-  else if (command === "list") result = await listPublications();
+  if (command === "login") result = await login(options);
+  else if (command === "publish") result = await publish(positional, options);
+  else if (command === "status") result = await status(options);
+  else if (command === "list") result = await listPublications(options);
   else fail(`Unknown command: ${command}\n\n${usage()}`);
   printResult(result, options.json);
 }
@@ -370,4 +445,4 @@ if (process.argv[1] && basename(process.argv[1]).toLowerCase() === "cli.js") {
   main().catch((error) => { process.stderr.write(`micro-hoster: ${error.message}\n`); process.exitCode = error.exitCode || 1; });
 }
 
-export { defaultSlug, inventory, monthlyDeploymentUsage, prepareInput, slugify, validateSlug };
+export { defaultSlug, inventory, monthlyDeploymentUsage, prepareInput, selectAccount, slugify, validateSlug };
