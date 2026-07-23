@@ -1,0 +1,26 @@
+{
+  "name": "micro-hoster",
+  "version": "0.2.0",
+  "description": "Publish local HTML and static micro-apps to verified public Cloudflare Pages share links.",
+  "author": {
+    "name": "matvei77"
+  },
+  "homepage": "https://github.com/matvei77/micro-hoster",
+  "license": "MIT",
+  "keywords": [
+    "cloudflare-pages",
+    "static-hosting",
+    "sharing"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Micro Hoster",
+    "shortDescription": "Publish static artifacts to verified share links.",
+    "longDescription": "Use the share-on-pages workflow to safely publish local HTML files and prebuilt static apps with Micro Hoster.",
+    "developerName": "matvei77",
+    "capabilities": [
+      "Write"
+    ],
+    "websiteURL": "https://github.com/matvei77/micro-hoster"
+  }
+}

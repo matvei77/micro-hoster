@@ -1,0 +1,18 @@
+{
+  "name": "micro-hoster",
+  "description": "Micro Hoster plugins",
+  "owner": {
+    "name": "matvei77"
+  },
+  "plugins": [
+    {
+      "name": "micro-hoster",
+      "description": "Publish local HTML and static micro-apps to verified public Cloudflare Pages share links.",
+      "version": "0.2.0",
+      "source": "./",
+      "author": {
+        "name": "matvei77"
+      }
+    }
+  ]
+}

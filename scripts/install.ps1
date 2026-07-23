@@ -1,10 +1,11 @@
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$skillSource = Join-Path $repoRoot "plugins\micro-hoster\skills\share-on-pages"
+$skillSource = Join-Path $repoRoot "skills\share-on-pages"
 $legacySkillSources = @(
     (Join-Path $repoRoot "integrations\skills\share-on-pages"),
-    (Join-Path $repoRoot ".agents\plugins\plugins\micro-hoster\skills\share-on-pages")
+    (Join-Path $repoRoot ".agents\plugins\plugins\micro-hoster\skills\share-on-pages"),
+    (Join-Path $repoRoot "plugins\micro-hoster\skills\share-on-pages")
 )
 $skillTargets = @(
     (Join-Path $env:USERPROFILE ".codex\skills\share-on-pages"),
@@ -38,4 +39,4 @@ foreach ($target in $skillTargets) {
 }
 
 micro-hoster --version
-Write-Output "Installed the command and share-on-pages skill for Codex, Claude Code, and Kimi Code."
+Write-Output "Installed the command and share-on-pages skill for Codex, Claude Code, Kimi Code, and OpenCode."
