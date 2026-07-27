@@ -28,6 +28,18 @@ An account ID also works. For persistent selection, set `CLOUDFLARE_ACCOUNT_ID`.
 
 Project names are deliberately not shared by this repository. Choose a unique neutral name for your own account. If that Pages project already exists, Micro Hoster refuses to use it unless you explicitly add `--adopt-existing`.
 
+### What happens when someone clones this repository
+
+A clone does not inherit the maintainer's Cloudflare account, Pages project, or `micro-hoster.pages.dev` hostname. The repository contains none of those credentials or defaults. Each owner must:
+
+1. sign in to their own Cloudflare account with `micro-hoster login`;
+2. choose a unique Pages project name;
+3. explicitly adopt that project if it already exists.
+
+Cloudflare gives their project a separate `<project>.pages.dev` address, or a suffixed variant if that hostname is unavailable. They cannot deploy to the maintainer's project unless the maintainer separately grants them access to the relevant Cloudflare account.
+
+They can attach a custom domain they control in exactly the same way. A custom hostname is another route to the Pages deployment, not a replacement for the `pages.dev` route, so confidential sites must protect the custom hostname, production hostname, and preview wildcard with Cloudflare Access. See [docs/cloudflare-access.md](docs/cloudflare-access.md).
+
 ## Install the agent skill
 
 The same `share-on-pages` workflow is packaged for Codex, Claude Code, Kimi Code, and OpenCode.
@@ -137,6 +149,8 @@ Access mode performs unauthenticated preflight checks and refuses to deploy unle
 
 Cloudflare Access normally uses an identity provider or email one-time PIN rather than a shared password. See [docs/cloudflare-access.md](docs/cloudflare-access.md) for the safe setup order and cleanup guidance.
 
+Every clone must repeat that setup in its owner's Cloudflare account using a domain that owner controls. No custom domain or Access policy is inherited from this repository.
+
 ## Safety and cost boundary
 
 - Unlisted links are public. Use verified Access mode for confidential material.
@@ -156,4 +170,5 @@ Cloudflare Access normally uses an identity provider or email one-time PIN rathe
 - `.claude-plugin` — Claude Code plugin and marketplace
 - `.kimi-plugin/plugin.json` — Kimi Code plugin
 - `docs/cloudflare-access.md` — custom-domain and Access setup
+- `docs/blog-post.md` — publishable project announcement and security explanation
 - `scripts/install.ps1` and `scripts/install.sh` — shared local installers
