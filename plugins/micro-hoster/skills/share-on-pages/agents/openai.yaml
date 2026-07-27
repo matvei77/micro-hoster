@@ -1,4 +1,4 @@
 interface:
   display_name: "Share on Pages"
   short_description: "Publish a local web artifact to your Cloudflare account"
-  default_prompt: "Use $share-on-pages to publish this HTML artifact to my Cloudflare account and return a verified public share link."
+  default_prompt: "Use $share-on-pages to publish this HTML artifact with my configured visibility and return a verified share link."

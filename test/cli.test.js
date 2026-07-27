@@ -5,22 +5,29 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { monthlyDeploymentUsage, selectAccount, slugify } from "../src/cli.js";
+import { accessProtectionStatus, defaultSlug, monthlyDeploymentUsage, projectDomains, renderLanding, selectAccount, slugify, validateDomain } from "../src/cli.js";
 
 const execFileAsync = promisify(execFile);
 const cli = resolve("src/cli.js");
 
 test("slugify creates URL-safe slugs", () => assert.equal(slugify("Quarterly Plan v2.html"), "quarterly-plan-v2"));
 
+test("default slugs are unguessable and do not collide", () => {
+  const first = defaultSlug("Quarterly Plan.html");
+  const second = defaultSlug("Quarterly Plan.html");
+  assert.match(first, /^quarterly-plan-[a-f0-9]{32}$/);
+  assert.notEqual(first, second);
+});
+
 test("dry-run accepts one HTML file", async () => {
   const root = await mkdtemp(join(tmpdir(), "micro-hoster-test-"));
   const html = join(root, "Plan.html");
   await writeFile(html, "<!doctype html><title>Plan</title><h1>Ready</h1>");
-  const { stdout } = await execFileAsync(process.execPath, [cli, "publish", html, "--slug", "team-plan", "--dry-run", "--json"], { env: { ...process.env, MICRO_HOSTER_HOME: join(root, "state") } });
+  const { stdout } = await execFileAsync(process.execPath, [cli, "publish", html, "--project", "neutral-test-host", "--slug", "team-plan", "--dry-run", "--json"], { env: { ...process.env, MICRO_HOSTER_HOME: join(root, "state") } });
   const result = JSON.parse(stdout);
   assert.equal(result.ok, true);
   assert.equal(result.slug, "team-plan");
-  assert.equal(result.files, 3);
+  assert.equal(result.files, 5);
 });
 
 test("dry-run accepts a static app folder", async () => {
@@ -29,17 +36,24 @@ test("dry-run accepts a static app folder", async () => {
   await mkdir(app);
   await writeFile(join(app, "index.html"), "<!doctype html><script src=\"app.js\"></script>");
   await writeFile(join(app, "app.js"), "document.body.append('works')");
-  const { stdout } = await execFileAsync(process.execPath, [cli, "publish", app, "--dry-run", "--json"], { env: { ...process.env, MICRO_HOSTER_HOME: join(root, "state") } });
+  const { stdout } = await execFileAsync(process.execPath, [cli, "publish", app, "--project", "neutral-test-host", "--dry-run", "--json"], { env: { ...process.env, MICRO_HOSTER_HOME: join(root, "state") } });
   const result = JSON.parse(stdout);
   assert.equal(result.ok, true);
-  assert.equal(result.files, 4);
+  assert.equal(result.files, 6);
 });
 
 test("publisher rejects secrets", async () => {
   const root = await mkdtemp(join(tmpdir(), "micro-hoster-test-"));
   await writeFile(join(root, "index.html"), "ok");
   await writeFile(join(root, ".env"), "SECRET=do-not-publish");
-  await assert.rejects(execFileAsync(process.execPath, [cli, "publish", root, "--dry-run"], { env: { ...process.env, MICRO_HOSTER_HOME: join(root, "state") } }), /Refusing to publish possible secret/);
+  await assert.rejects(execFileAsync(process.execPath, [cli, "publish", root, "--project", "neutral-test-host", "--dry-run"], { env: { ...process.env, MICRO_HOSTER_HOME: join(root, "state") } }), /Refusing to publish possible secret/);
+});
+
+test("publisher scans allowed text filenames for credential content", async () => {
+  const root = await mkdtemp(join(tmpdir(), "micro-hoster-test-"));
+  await writeFile(join(root, "index.html"), "ok");
+  await writeFile(join(root, "config.js"), "const access_token = \"fake-but-sensitive-credential-value\";");
+  await assert.rejects(execFileAsync(process.execPath, [cli, "publish", root, "--project", "neutral-test-host", "--dry-run"], { env: { ...process.env, MICRO_HOSTER_HOME: join(root, "state") } }), /detected assigned credential/);
 });
 
 test("publisher rejects Pages Functions", async () => {
@@ -47,7 +61,15 @@ test("publisher rejects Pages Functions", async () => {
   await writeFile(join(root, "index.html"), "ok");
   await mkdir(join(root, "functions"));
   await writeFile(join(root, "functions", "hello.js"), "export const onRequest = () => new Response('hi')");
-  await assert.rejects(execFileAsync(process.execPath, [cli, "publish", root, "--dry-run"], { env: { ...process.env, MICRO_HOSTER_HOME: join(root, "state") } }), /forbidden path/);
+  await assert.rejects(execFileAsync(process.execPath, [cli, "publish", root, "--project", "neutral-test-host", "--dry-run"], { env: { ...process.env, MICRO_HOSTER_HOME: join(root, "state") } }), /forbidden path/);
+});
+
+test("publisher rejects credential-store folders even when they are the input root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "micro-hoster-test-"));
+  const store = join(root, ".micro-hoster");
+  await mkdir(store);
+  await writeFile(join(store, "index.html"), "ok");
+  await assert.rejects(execFileAsync(process.execPath, [cli, "publish", store, "--project", "neutral-test-host", "--dry-run"], { env: { ...process.env, MICRO_HOSTER_HOME: join(root, "state") } }), /forbidden path/);
 });
 
 test("monthly cost guard reports the conservative free-tier buffer", () => {
@@ -68,7 +90,63 @@ test("publisher refuses deployment when the local monthly ceiling is reached", a
   await mkdir(state);
   await writeFile(html, "<!doctype html><title>Plan</title>");
   await writeFile(join(state, "manifest.json"), JSON.stringify({ version: 1, publications: [], deployments }));
-  await assert.rejects(execFileAsync(process.execPath, [cli, "publish", html, "--dry-run"], { env: { ...process.env, MICRO_HOSTER_HOME: state } }), /Cost guard stopped this deployment/);
+  await assert.rejects(execFileAsync(process.execPath, [cli, "publish", html, "--project", "neutral-test-host", "--dry-run"], { env: { ...process.env, MICRO_HOSTER_HOME: state } }), /Cost guard stopped this deployment/);
+});
+
+test("fresh installations require an explicit neutral project", async () => {
+  const root = await mkdtemp(join(tmpdir(), "micro-hoster-test-"));
+  const html = join(root, "plan.html");
+  await writeFile(html, "<!doctype html><title>Plan</title>");
+  await assert.rejects(execFileAsync(process.execPath, [cli, "publish", html, "--dry-run"], { env: { ...process.env, MICRO_HOSTER_HOME: join(root, "state"), MICRO_HOSTER_PROJECT: "" } }), /No Pages project is configured/);
+});
+
+test("landing page does not enumerate retained publications", () => {
+  const html = renderLanding();
+  assert.doesNotMatch(html, /Shared artifacts|quarterly-plan|<li>|<a /);
+  assert.match(html, /unlisted shared content/);
+});
+
+test("custom domains and Wrangler project-domain output are normalized", () => {
+  assert.equal(validateDomain("Plans.Example.com."), "plans.example.com");
+  assert.throws(() => validateDomain("https://plans.example.com/path"), /without a scheme/);
+  assert.deepEqual(projectDomains({ "Project Domains": "neutral.pages.dev, Plans.Example.com" }, "neutral"), ["neutral.pages.dev", "plans.example.com"]);
+});
+
+test("Cloudflare Access redirects are recognized", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 302, headers: { location: "https://team.cloudflareaccess.com/cdn-cgi/access/login/plans.example.com" } });
+  try {
+    const result = await accessProtectionStatus("https://plans.example.com/");
+    assert.equal(result.protected, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("an unrelated redirect to cloudflareaccess.com is not accepted as protection", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 302, headers: { location: "https://team.cloudflareaccess.com/cdn-cgi/access/login/unrelated.example.com" } });
+  try {
+    const result = await accessProtectionStatus("https://plans.example.com/");
+    assert.equal(result.protected, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a pages.dev redirect to an Access-protected custom domain is accepted", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("neutral.pages.dev")) return new Response(null, { status: 301, headers: { location: "https://plans.example.com/" } });
+    return new Response(null, { status: 302, headers: { location: "https://team.cloudflareaccess.com/cdn-cgi/access/login/plans.example.com" } });
+  };
+  try {
+    const result = await accessProtectionStatus("https://neutral.pages.dev/");
+    assert.equal(result.protected, true);
+    assert.deepEqual(result.redirects, ["plans.example.com", "team.cloudflareaccess.com"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("Cloudflare account selection is explicit when multiple accounts exist", () => {
