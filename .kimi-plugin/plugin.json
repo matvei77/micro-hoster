@@ -1,7 +1,7 @@
 {
   "name": "micro-hoster",
-  "version": "0.2.0",
-  "description": "Publish local HTML and static micro-apps to verified public Cloudflare Pages share links.",
+  "version": "0.3.0",
+  "description": "Publish local HTML and static micro-apps to verified unlisted or Access-protected Cloudflare Pages links.",
   "author": {
     "name": "matvei77"
   },
